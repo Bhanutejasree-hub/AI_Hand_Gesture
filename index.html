@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Hand Gesture Recognition</title>
+
+    <script type="module">
+        import {
+            FilesetResolver,
+            GestureRecognizer
+        } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+
+        let gestureRecognizer;
+        let webcamRunning = false;
+        let lastGesture = "";
+
+        const video = document.getElementById("webcam");
+        const canvas = document.getElementById("output");
+        const ctx = canvas.getContext("2d");
+
+        const startButton = document.getElementById("startButton");
+        const stopButton = document.getElementById("stopButton");
+        const gestureText = document.getElementById("gesture");
+        const confidenceText = document.getElementById("confidence");
+        const actionText = document.getElementById("action");
+        const statusText = document.getElementById("status");
+
+        async function initializeModel() {
+            statusText.textContent = "Loading AI model...";
+
+            const vision = await FilesetResolver.forVisionTasks(
+                "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
+            );
+
+            gestureRecognizer = await GestureRecognizer.createFromOptions(
+                vision,
+                {
+                    baseOptions: {
+                        modelAssetPath:
+                        "https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task",
+                        delegate: "GPU"
+                    },
+                    runningMode: "VIDEO",
+                    numHands: 1,
+                    minHandDetectionConfidence: 0.5,
+                    minHandPresenceConfidence: 0.5,
+                    minTrackingConfidence: 0.5
+                }
+            );
+
+            statusText.textContent = "AI model loaded successfully!";
+            startButton.disabled = false;
+        }
+
+        function getAction(gesture) {
+            const actions = {
+                "Open_Palm": "Resume",
+                "Closed_Fist": "Pause",
+                "Victory": "Mouse Click",
+                "Thumb_Up": "Volume Up"
+            };
+
+            return actions[gesture] || "No assigned action";
+        }
+
+        function displayResult(result) {
+            if (
+                result.gestures &&
+                result.gestures.length > 0 &&
+                result.gestures[0].length > 0
+            ) {
+                const gesture = result.gestures[0][0].categoryName;
+                const confidence = result.gestures[0][0].score;
+
+                if (gesture !== "None") {
+                    gestureText.textContent =
+                        gesture.replaceAll("_", " ");
+
+                    confidenceText.textContent =
+                        (confidence * 100).toFixed(2) + "%";
+
+                    actionText.textContent = getAction(gesture);
+
+                    lastGesture = gesture;
+                    statusText.textContent = "Gesture detected successfully!";
+                }
+            } else {
+                gestureText.textContent = "No Gesture Detected";
+                confidenceText.textContent = "--";
+                actionText.textContent = "--";
+                lastGesture = "";
+            }
+        }
+
+        function drawHand(result) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            if (result.landmarks && result.landmarks.length > 0) {
+                const connections = [
+                    [0,1],[1,2],[2,3],[3,4],
+                    [0,5],[5,6],[6,7],[7,8],
+                    [5,9],[9,10],[10,11],[11,12],
+                    [9,13],[13,14],[14,15],[15,16],
+                    [13,17],[17,18],[18,19],[19,20],
+                    [0,17]
+                ];
+
+                for (const hand of result.landmarks) {
+                    ctx.strokeStyle = "#00ff99";
+                    ctx.lineWidth = 3;
+
+                    for (const [start, end] of connections) {
+                        ctx.beginPath();
+                        ctx.moveTo(
+                            hand[start].x * canvas.width,
+                            hand[start].y * canvas.height
+                        );
+                        ctx.lineTo(
+                            hand[end].x * canvas.width,
+                            hand[end].y * canvas.height
+                        );
+                        ctx.stroke();
+                    }
+
+                    ctx.fillStyle = "#ff3366";
+
+                    for (const point of hand) {
+                        ctx.beginPath();
+                        ctx.arc(
+                            point.x * canvas.width,
+                            point.y * canvas.height,
+                            5, 0, 2 * Math.PI
+                        );
+                        ctx.fill();
+                    }
+                }
+            }
+        }
+
+        async function startCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: "user" }
+                });
+
+                video.srcObject = stream;
+                await video.play();
+
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+
+                webcamRunning = true;
+                startButton.disabled = true;
+                stopButton.disabled = false;
+
+                statusText.textContent = "Camera started! Show your hand.";
+
+                predictWebcam();
+
+            } catch (error) {
+                statusText.textContent =
+                    "Camera error: " + error.message;
+            }
+        }
+
+        function predictWebcam() {
+            if (!webcamRunning) return;
+
+            if (video.readyState >= 2) {
+                const now = performance.now();
+
+                const result = gestureRecognizer.recognizeForVideo(
+                    video,
+                    now
+                );
+
+                displayResult(result);
+                drawHand(result);
+            }
+
+            requestAnimationFrame(predictWebcam);
+        }
+
+        function stopCamera() {
+            webcamRunning = false;
+
+            if (video.srcObject) {
+                video.srcObject.getTracks().forEach(track => track.stop());
+                video.srcObject = null;
+            }
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            gestureText.textContent = "Waiting...";
+            confidenceText.textContent = "--";
+            actionText.textContent = "--";
+
+            statusText.textContent = "Camera stopped.";
+
+            startButton.disabled = false;
+            stopButton.disabled = true;
+        }
+
+        startButton.addEventListener("click", startCamera);
+        stopButton.addEventListener("click", stopCamera);
+
+        initializeModel().catch(error => {
+            statusText.textContent =
+                "Model loading failed: " + error.message;
+        });
+    </script>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background: #101827;
+            color: white;
+            text-align: center;
+        }
+
+        header {
+            padding: 25px 15px;
+            background: #172b50;
+        }
+
+        h1 {
+            color: #69b7ff;
+            margin: 0 0 10px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 25px auto;
+            padding: 20px;
+        }
+
+        .camera-box {
+            position: relative;
+            max-width: 640px;
+            margin: 20px auto;
+            background: #000;
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        video {
+            display: block;
+            width: 100%;
+        }
+
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        button {
+            padding: 12px 25px;
+            margin: 10px;
+            border: none;
+            border-radius: 7px;
+            background: #1686e8;
+            color: white;
+            font-size: 16px;
+            cursor: pointer;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .result-box {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 15px;
+            margin-top: 25px;
+        }
+
+        .card {
+            background: #1b2b43;
+            padding: 20px;
+            border-radius: 10px;
+        }
+
+        .card h3 {
+            color: #69b7ff;
+        }
+
+        .card p {
+            font-size: 20px;
+            font-weight: bold;
+        }
+
+        #status {
+            color: #8ed2ff;
+            margin-top: 20px;
+        }
+
+        .gestures {
+            margin-top: 30px;
+            line-height: 2;
+            background: #1b2b43;
+            padding: 20px;
+            border-radius: 10px;
+        }
+
+        footer {
+            padding: 20px;
+            color: #aab8ca;
+        }
+    </style>
+</head>
+
+<body>
+
+<header>
+    <h1>AI Hand Gesture Recognition</h1>
+    <p>Real-Time Hand Detection Using MediaPipe</p>
+</header>
+
+<div class="container">
+
+    <h2>Live Camera Detection</h2>
+
+    <div class="camera-box">
+        <video id="webcam" autoplay playsinline muted></video>
+        <canvas id="output"></canvas>
+    </div>
+
+    <button id="startButton" disabled>Start Camera</button>
+    <button id="stopButton" disabled>Stop Camera</button>
+
+    <p id="status">Loading AI model...</p>
+
+    <div class="result-box">
+
+        <div class="card">
+            <h3>Detected Gesture</h3>
+            <p id="gesture">Waiting...</p>
+        </div>
+
+        <div class="card">
+            <h3>Confidence Score</h3>
+            <p id="confidence">--</p>
+        </div>
+
+        <div class="card">
+            <h3>Assigned Action</h3>
+            <p id="action">--</p>
+        </div>
+
+    </div>
+
+    <div class="gestures">
+        <h2>Supported Hand Gestures</h2>
+        <p>✋ Open Palm - Resume</p>
+        <p>✊ Closed Fist - Pause</p>
+        <p>✌️ Victory - Mouse Click</p>
+        <p>👍 Thumb Up - Volume Up</p>
+    </div>
+
+</div>
+
+<footer>
+    <p>AI Hand Gesture Recognition System</p>
+    <p>Developed as part of YR NOVATECH AI & ML Internship</p>
+</footer>
+
+</body>
+</html>
